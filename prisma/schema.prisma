@@ -1,0 +1,152 @@
+
+generator client {
+  provider = "prisma-client"
+  output   = "./generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum DownloadType {
+  ISSUED
+  RECEIVED
+}
+
+enum DownloadStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  PARTIAL
+  FAILED
+}
+
+enum PackageStatus {
+  PENDING
+  DOWNLOADED
+  FAILED
+}
+
+enum DownloadFormat {
+  XML
+  METADATA
+}
+
+model RfcLicense {
+  id                String   @id @default(uuid())
+  rfc               String   @unique @db.VarChar(13)
+  passwordHash      String
+
+  name              String?
+  notes             String?
+  passwordChangedAt DateTime?
+
+  isAdmin           Boolean  @default(false)
+  expiresAt         DateTime?
+  isActive          Boolean  @default(true)
+
+  lastLoginAt       DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  requests          DownloadRequest[]
+  devices           AgentDevice[]
+  pairingCodes      AgentPairingCode[]
+
+  @@index([isActive, expiresAt])
+  @@index([isAdmin])
+}
+
+model AgentDevice {
+  id           String   @id @default(uuid())
+  licenseId    String
+
+  name         String   @db.VarChar(100)
+  platform     String   @db.VarChar(30)
+  agentVersion String?  @db.VarChar(30)
+
+  tokenHash    String   @unique
+
+  isActive     Boolean  @default(true)
+  lastSeenAt   DateTime?
+  revokedAt    DateTime?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  license      RfcLicense       @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+  requests     DownloadRequest[]
+
+  @@index([licenseId, isActive])
+  @@index([lastSeenAt])
+}
+
+model AgentPairingCode {
+  id          String   @id @default(uuid())
+  licenseId   String
+
+  codeHash    String   @unique
+  expiresAt   DateTime
+  consumedAt  DateTime?
+
+  createdAt   DateTime @default(now())
+
+  license     RfcLicense @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+
+  @@index([licenseId, expiresAt])
+}
+
+model DownloadRequest {
+  id                  String         @id @default(uuid())
+  licenseId           String
+
+  startDate           DateTime       @db.Date
+  endDate             DateTime       @db.Date
+  requestType         DownloadType
+  downloadFormat DownloadFormat @default(XML)
+
+  satRequestId        String?
+  status              DownloadStatus @default(PENDING)
+
+  documentsDownloaded Int            @default(0)
+  errorMessage        String?
+
+  // Control de ejecución por el agente local
+  assignedDeviceId    String?
+  attempts            Int            @default(0)
+  startedAt           DateTime?
+  leaseExpiresAt      DateTime?
+
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  completedAt         DateTime?
+
+  license             RfcLicense     @relation(fields: [licenseId], references: [id], onDelete: Restrict)
+  assignedDevice      AgentDevice?   @relation(fields: [assignedDeviceId], references: [id], onDelete: SetNull)
+  packages            DownloadPackage[]
+
+  @@index([licenseId, createdAt])
+  @@index([status])
+  @@index([satRequestId])
+  @@index([assignedDeviceId, status])
+  @@index([status, leaseExpiresAt])
+}
+
+model DownloadPackage {
+  id             String        @id @default(uuid())
+  requestId      String
+
+  satPackageId   String
+  status         PackageStatus @default(PENDING)
+
+  documentCount  Int           @default(0)
+  downloadedAt   DateTime?
+
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  request        DownloadRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, satPackageId])
+  @@index([requestId])
+}
