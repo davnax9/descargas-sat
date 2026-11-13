@@ -1,11 +1,12 @@
 
 import { NextResponse } from "next/server";
-import { createHmac } from "node:crypto";
+import {
+  createPrivateKey,
+  sign,
+} from "node:crypto";
 
 import prisma from "@/utils/prisma";
 import { getCurrentLicense } from "@/utils/auth/session";
-
-export const instant = false;
 
 export async function GET(
   _request: Request,
@@ -16,14 +17,14 @@ export async function GET(
 
     if (!license || license.isAdmin) {
       return NextResponse.json(
-        { error: "No tienes autorización para descargar estos archivos." },
+        { error: "No autorizado." },
         { status: 403 }
       );
     }
 
     const { jobId } = await params;
 
-    const request = await prisma.downloadRequest.findFirst({
+    const downloadRequest = await prisma.downloadRequest.findFirst({
       where: {
         id: jobId,
         licenseId: license.id,
@@ -39,26 +40,41 @@ export async function GET(
       },
     });
 
-    if (!request) {
+    if (!downloadRequest) {
       return NextResponse.json(
-        { error: "La solicitud no existe o no tiene archivos disponibles." },
+        { error: "Descarga no encontrada o no autorizada." },
         { status: 404 }
       );
     }
 
-    const secret = process.env.DOWNLOAD_TOKEN_SECRET;
+    const privateKeyBase64 =
+      process.env.DOWNLOAD_TOKEN_PRIVATE_KEY?.trim();
 
-    if (!secret || secret.length < 32) {
-      console.error("DOWNLOAD_TOKEN_SECRET no está configurado correctamente.");
+    if (!privateKeyBase64) {
+      console.error(
+        "Falta configurar DOWNLOAD_TOKEN_PRIVATE_KEY."
+      );
 
       return NextResponse.json(
-        { error: "La autorización de descargas no está configurada." },
+        { error: "Error de configuración del servidor." },
         { status: 500 }
       );
     }
 
+    const privateKey = createPrivateKey({
+      key: Buffer.from(privateKeyBase64, "base64"),
+      format: "der",
+      type: "pkcs8",
+    });
+
+    if (privateKey.asymmetricKeyType !== "ed25519") {
+      throw new Error(
+        "DOWNLOAD_TOKEN_PRIVATE_KEY no es una clave Ed25519."
+      );
+    }
+
     const payload = {
-      jobId: request.id,
+      jobId: downloadRequest.id,
       licenseId: license.id,
       exp: Math.floor(Date.now() / 1000) + 300,
     };
@@ -67,9 +83,11 @@ export async function GET(
       JSON.stringify(payload)
     ).toString("base64url");
 
-    const signature = createHmac("sha256", secret)
-      .update(encodedPayload)
-      .digest("base64url");
+    const signature = sign(
+      null,
+      Buffer.from(encodedPayload),
+      privateKey
+    ).toString("base64url");
 
     const token = `${encodedPayload}.${signature}`;
 
@@ -82,10 +100,13 @@ export async function GET(
       }
     );
   } catch (error) {
-    console.error("Error generando token de descarga:", error);
+    console.error(
+      "Error generando token de descarga:",
+      error
+    );
 
     return NextResponse.json(
-      { error: "No fue posible autorizar la descarga." },
+      { error: "No fue posible generar el token de descarga." },
       { status: 500 }
     );
   }

@@ -5,7 +5,7 @@ import {
   type Response,
   type NextFunction,
 } from "express";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createPublicKey, verify } from "node:crypto";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { ZipArchive } from "archiver";
@@ -23,6 +23,7 @@ import {
 
 const router = Router();
 
+
 type DownloadTokenPayload = {
   jobId: string;
   licenseId: string;
@@ -39,86 +40,127 @@ function getJobId(req: Request): string {
   return jobId;
 }
 
-function verifyDownloadToken(
-  req: Request,
-  res: Response,
-  next: NextFunction
-) {
+/**
+ * Verifica la firma Ed25519 y el contenido del token.
+ */
+function validateDownloadToken(
+  token: string,
+  jobId: string
+): DownloadTokenPayload | null {
   try {
-    const authorization = req.headers.authorization;
-
-    if (!authorization?.startsWith("Bearer ")) {
-      res.status(401).json({
-        ok: false,
-        error: "Falta autorización para descargar archivos.",
-      });
-      return;
-    }
-
-    const token = authorization.slice(7);
     const parts = token.split(".");
 
     if (parts.length !== 2) {
-      res.status(401).json({
-        ok: false,
-        error: "Token de descarga inválido.",
-      });
-      return;
+      return null;
     }
 
     const [encodedPayload, encodedSignature] = parts;
 
-    const expectedSignature = createHmac(
-      "sha256",
-      config.downloadTokenSecret
-    )
-      .update(encodedPayload)
-      .digest();
+    if (!encodedPayload || !encodedSignature) {
+      return null;
+    }
 
-    const receivedSignature = Buffer.from(
+    const publicKey = createPublicKey({
+      key: Buffer.from(config.downloadTokenPublicKey, "base64"),
+      format: "der",
+      type: "spki",
+    });
+
+    if (publicKey.asymmetricKeyType !== "ed25519") {
+      return null;
+    }
+
+    const signature = Buffer.from(
       encodedSignature,
       "base64url"
     );
 
-    if (
-      receivedSignature.length !== expectedSignature.length ||
-      !timingSafeEqual(receivedSignature, expectedSignature)
-    ) {
-      res.status(401).json({
-        ok: false,
-        error: "Firma del token inválida.",
-      });
-      return;
+    // Las firmas Ed25519 siempre tienen 64 bytes.
+    if (signature.length !== 64) {
+      return null;
+    }
+
+    const isValid = verify(
+      null,
+      Buffer.from(encodedPayload),
+      publicKey,
+      signature
+    );
+
+    if (!isValid) {
+      return null;
     }
 
     const payload = JSON.parse(
       Buffer.from(encodedPayload, "base64url").toString("utf8")
     ) as DownloadTokenPayload;
 
-    const requestedJobId = req.params.jobId;
-
     if (
-      !payload.jobId ||
+      typeof payload.jobId !== "string" ||
+      typeof payload.licenseId !== "string" ||
       !payload.licenseId ||
       !Number.isInteger(payload.exp) ||
       payload.exp <= Math.floor(Date.now() / 1000) ||
-      typeof requestedJobId !== "string" ||
-      payload.jobId !== requestedJobId
+      payload.jobId !== jobId
     ) {
-      res.status(401).json({
-        ok: false,
-        error: "El token expiró o no corresponde a esta solicitud.",
-      });
-      return;
+      return null;
     }
 
-    next();
+    return payload;
   } catch {
+    return null;
+  }
+}
+
+/**
+ * Middleware de Express para proteger las descargas.
+ */
+function verifyDownloadToken(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  const authorization = req.headers.authorization;
+
+  if (!authorization?.startsWith("Bearer ")) {
     res.status(401).json({
       ok: false,
-      error: "No fue posible validar el token de descarga.",
+      error: "Token de descarga no proporcionado.",
     });
+    return;
   }
+
+  const token = authorization.slice(7).trim();
+
+  if (!token) {
+    res.status(401).json({
+      ok: false,
+      error: "Token de descarga inválido.",
+    });
+    return;
+  }
+
+  const jobId = req.params.jobId;
+
+  if (typeof jobId !== "string") {
+    res.status(400).json({
+      ok: false,
+      error: "Identificador de solicitud inválido.",
+    });
+    return;
+  }
+
+  const payload = validateDownloadToken(token, jobId);
+
+  if (!payload) {
+    res.status(401).json({
+      ok: false,
+      error: "Token de descarga inválido o expirado.",
+    });
+    return;
+  }
+
+  next();
 }
 
 function validateJobId(

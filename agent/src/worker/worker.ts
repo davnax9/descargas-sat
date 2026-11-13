@@ -16,21 +16,34 @@ type JobHandler = (
   signal: AbortSignal
 ) => Promise<AgentJobResult>;
 
+
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
     return Promise.resolve();
   }
 
   return new Promise((resolve) => {
+    let finished = false;
+
     const finish = () => {
+      if (finished) return;
+
+      finished = true;
+
       clearTimeout(timer);
       signal.removeEventListener("abort", finish);
+
       resolve();
     };
 
     const timer = setTimeout(finish, ms);
 
     signal.addEventListener("abort", finish, { once: true });
+
+    // Segunda comprobación para evitar perder una señal de cierre.
+    if (signal.aborted) {
+      finish();
+    }
   });
 }
 
@@ -136,17 +149,76 @@ export async function startAgentWorker(
         }
       }, HEARTBEAT_INTERVAL_MS);
 
+      
       try {
         console.log(
           "[WORKER] Iniciando procesamiento:",
           job.id
         );
 
-        const result = await processJob(
-          job,
-          controller.signal
-        );
+        let result: AgentJobResult;
 
+        // 1. Procesar el trabajo.
+        try {
+          result = await processJob(
+            job,
+            controller.signal
+          );
+        } catch (error) {
+          if (shutdownSignal.aborted) {
+            console.warn(
+              `[WORKER] Trabajo ${job.id} interrumpido por cierre del agente.`
+            );
+
+            continue;
+          }
+
+          if (leaseLost || controller.signal.aborted) {
+            console.warn(
+              `[WORKER] Trabajo ${job.id} interrumpido por pérdida del lease.`
+            );
+
+            continue;
+          }
+
+          console.error(
+            "[WORKER] Error procesando trabajo:",
+            error
+          );
+
+          // 2. Solo los errores reales de procesamiento
+          // se reportan como FAILED.
+          const failureResult: AgentJobResult = {
+            status: "FAILED",
+            documentsDownloaded: 0,
+            satRequestId: job.satRequestId ?? undefined,
+            errorMessage:
+              error instanceof Error
+                ? error.message.slice(0, 2000)
+                : "Error desconocido durante el procesamiento.",
+          };
+
+          try {
+            await reportJobResult(
+              job.id,
+              failureResult
+            );
+
+            console.log(
+              "[WORKER] Se reportó el trabajo como FAILED:",
+              job.id
+            );
+          } catch (reportError) {
+            console.error(
+              "[WORKER] No se pudo reportar el fallo a Vercel. El lease permitirá recuperar el trabajo:",
+              reportError
+            );
+          }
+
+          continue;
+        }
+
+        // 3. No reportar si el agente está cerrándose.
         if (shutdownSignal.aborted) {
           console.warn(
             `[WORKER] Cierre solicitado. No se reportará el resultado de ${job.id}.`
@@ -163,55 +235,23 @@ export async function startAgentWorker(
           continue;
         }
 
-        await reportJobResult(job.id, result);
+        // 4. Reportar el resultado exitoso o parcial.
+        // Si falla la comunicación, NO convertirlo en FAILED.
+        try {
+          await reportJobResult(job.id, result);
 
-        console.log("[WORKER] Trabajo finalizado:", {
-          id: job.id,
-          status: result.status,
-          documentsDownloaded: result.documentsDownloaded,
-          satRequestId: result.satRequestId,
-        });
-      } catch (error) {
-        if (shutdownSignal.aborted) {
-          console.warn(
-            `[WORKER] Trabajo ${job.id} interrumpido por cierre del agente.`
+          console.log("[WORKER] Trabajo finalizado:", {
+            id: job.id,
+            status: result.status,
+            documentsDownloaded: result.documentsDownloaded,
+            satRequestId: result.satRequestId,
+          });
+        } catch (reportError) {
+          console.error(
+            `[WORKER] El trabajo ${job.id} terminó, pero no se pudo reportar su resultado. No se marcará como FAILED:`,
+            reportError
           );
-
-          continue;
         }
-
-        if (leaseLost || controller.signal.aborted) {
-          console.warn(
-            `[WORKER] Trabajo ${job.id} interrumpido por pérdida del lease.`
-          );
-
-          continue;
-        }
-
-        console.error(
-          "[WORKER] Error procesando trabajo:",
-          error
-        );
-
-        const failureResult: AgentJobResult = {
-          status: "FAILED",
-          documentsDownloaded: 0,
-          satRequestId: job.satRequestId ?? undefined,
-          errorMessage:
-            error instanceof Error
-              ? error.message.slice(0, 2000)
-              : "Error desconocido durante el procesamiento.",
-        };
-
-        await reportJobResult(
-          job.id,
-          failureResult
-        );
-
-        console.log(
-          "[WORKER] Se reportó el trabajo como FAILED:",
-          job.id
-        );
       } finally {
         clearInterval(heartbeatTimer);
 
