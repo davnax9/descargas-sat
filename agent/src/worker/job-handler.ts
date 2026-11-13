@@ -10,8 +10,6 @@ import {
 } from "@nodecfdi/sat-ws-descarga-masiva";
 
 import {
-  generateCfdiExcel,
-  generateMetadataExcel,
   regenerateCfdiExcel,
 } from "../services/excel-service.js";
 
