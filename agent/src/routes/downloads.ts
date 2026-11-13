@@ -9,13 +9,17 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { ZipArchive } from "archiver";
-
 import { config } from "../config/env.js";
 import {
   getExcelPath,
   getXmlDocumentPaths,
+  readMetadataRecords,
 } from "../services/download-storage.js";
-import { generateCfdiExcel } from "../services/excel-service.js";
+
+import {
+  generateCfdiExcel,
+  generateMetadataExcel,
+} from "../services/excel-service.js";
 
 const router = Router();
 
@@ -142,6 +146,7 @@ function validateJobId(
 // DESCARGAR EXCEL
 // =====================================================
 
+
 router.get(
   "/:jobId/excel",
   validateJobId,
@@ -151,11 +156,16 @@ router.get(
       const jobId = getJobId(req);
 
       const xmlPaths = await getXmlDocumentPaths(jobId);
+      const metadataRecords = await readMetadataRecords(jobId);
 
-      if (xmlPaths.length === 0) {
+      const hasXml = xmlPaths.length > 0;
+      const hasMetadata = metadataRecords.length > 0;
+
+      if (!hasXml && !hasMetadata) {
         res.status(404).json({
           ok: false,
-          error: "No hay archivos XML locales para generar el Excel.",
+          error:
+            "No hay archivos XML ni Metadata locales para generar el Excel.",
         });
         return;
       }
@@ -166,11 +176,13 @@ router.get(
         await access(excelPath);
       } catch {
         console.log(
-          "[DOWNLOAD] Excel inexistente. Regenerando desde XML locales:",
+          "[DOWNLOAD] Excel inexistente. Regenerando desde archivos locales:",
           jobId
         );
 
-        const result = await generateCfdiExcel(jobId);
+        const result = hasMetadata
+          ? await generateMetadataExcel(jobId)
+          : await generateCfdiExcel(jobId);
 
         if (!result.excelPath) {
           res.status(404).json({
@@ -186,7 +198,10 @@ router.get(
         `CFDI_${jobId}.xlsx`,
         (error) => {
           if (error && !res.headersSent) {
-            console.error("[DOWNLOAD] Error enviando Excel:", error);
+            console.error(
+              "[DOWNLOAD] Error enviando Excel:",
+              error
+            );
 
             res.status(500).json({
               ok: false,
@@ -196,7 +211,10 @@ router.get(
         }
       );
     } catch (error) {
-      console.error("[DOWNLOAD] Error preparando Excel:", error);
+      console.error(
+        "[DOWNLOAD] Error preparando Excel:",
+        error
+      );
 
       if (!res.headersSent) {
         res.status(500).json({
@@ -207,6 +225,7 @@ router.get(
     }
   }
 );
+
 
 // =====================================================
 // DESCARGAR XML EN ZIP

@@ -2,7 +2,7 @@
 import ExcelJS from "exceljs";
 import { XMLParser } from "fast-xml-parser";
 import { readFile } from "node:fs/promises";
-
+import { readMetadataRecords } from "./download-storage.js";
 import {
   getXmlDocumentPaths,
   saveExcelFile,
@@ -281,4 +281,122 @@ export async function generateCfdiExcel(jobId: string) {
     documentsProcessed,
     invalidDocuments: errors.length,
   };
+}
+
+export async function generateMetadataExcel(jobId: string) {
+  const records = await readMetadataRecords(jobId);
+
+  if (records.length === 0) {
+    return {
+      excelPath: null,
+      documentsProcessed: 0,
+      invalidDocuments: 0,
+    };
+  }
+
+  const workbook = new ExcelJS.Workbook();
+
+  workbook.creator = "CFDI Local";
+  workbook.created = new Date();
+
+  const worksheet = workbook.addWorksheet("Metadata");
+
+  // Primero mostramos los campos más útiles.
+  const preferredColumns = [
+    "uuid",
+    "rfcEmisor",
+    "nombreEmisor",
+    "rfcReceptor",
+    "nombreReceptor",
+    "fechaEmision",
+    "fechaCertificacionSat",
+    "monto",
+    "efectoComprobante",
+    "estatus",
+    "fechaCancelacion",
+  ];
+
+  // También conservamos cualquier campo adicional
+  // que venga en los registros del SAT.
+  const allKeys = Array.from(
+    new Set(records.flatMap((record) => Object.keys(record)))
+  );
+
+  const orderedKeys = [
+    ...preferredColumns.filter((key) => allKeys.includes(key)),
+    ...allKeys.filter((key) => !preferredColumns.includes(key)),
+  ];
+
+  worksheet.columns = orderedKeys.map((key) => ({
+    header: key,
+    key,
+    width: Math.max(18, Math.min(key.length + 8, 35)),
+  }));
+
+  for (const record of records) {
+    const row: Record<string, string> = {};
+
+    for (const key of orderedKeys) {
+      row[key] = record[key] ?? "";
+    }
+
+    worksheet.addRow(row);
+  }
+
+  const header = worksheet.getRow(1);
+
+  header.font = {
+    bold: true,
+    color: { argb: "FFFFFFFF" },
+  };
+
+  header.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF166534" },
+  };
+
+  header.alignment = {
+    vertical: "middle",
+    horizontal: "center",
+  };
+
+  worksheet.views = [
+    { state: "frozen", ySplit: 1 },
+  ];
+
+  worksheet.autoFilter = {
+    from: {
+      row: 1,
+      column: 1,
+    },
+    to: {
+      row: 1,
+      column: orderedKeys.length,
+    },
+  };
+
+  const buffer = await workbook.xlsx.writeBuffer();
+
+  const excelPath = await saveExcelFile(
+    jobId,
+    Buffer.from(buffer)
+  );
+
+  return {
+    excelPath,
+    documentsProcessed: records.length,
+    invalidDocuments: 0,
+  };
+}
+
+export async function regenerateCfdiExcel(
+  jobId: string,
+  downloadFormat: "XML" | "METADATA"
+) {
+  if (downloadFormat === "METADATA") {
+    return generateMetadataExcel(jobId);
+  }
+
+  return generateCfdiExcel(jobId);
 }

@@ -25,6 +25,7 @@ type Props = {
 };
 
 type StatusFilter = "ALL" | DownloadRequestItem["status"];
+type FormatFilter = "ALL" | DownloadRequestItem["downloadFormat"];
 
 const statusLabels: Record<DownloadRequestItem["status"], string> = {
   PENDING: "Pendiente",
@@ -79,6 +80,7 @@ export default function DownloadsClient({
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [formatFilter, setFormatFilter] = useState<FormatFilter>("ALL");
 
   const [downloadingId, setDownloadingId] = useState("");
   const [downloadError, setDownloadError] = useState("");
@@ -230,9 +232,15 @@ export default function DownloadsClient({
     (item) => item.status === "FAILED"
   ).length;
 
-  const filteredRequests = requests.filter(
-    (item) => statusFilter === "ALL" || item.status === statusFilter
-  );
+  const filteredRequests = requests.filter((item) => {
+    const matchesStatus =
+      statusFilter === "ALL" || item.status === statusFilter;
+
+    const matchesFormat =
+      formatFilter === "ALL" || item.downloadFormat === formatFilter;
+
+    return matchesStatus && matchesFormat;
+  });
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -603,21 +611,38 @@ export default function DownloadsClient({
             {filteredRequests.length} de {requests.length} solicitudes
           </span>
 
-          <select
-            value={statusFilter}
-            onChange={(event) =>
-              setStatusFilter(event.target.value as StatusFilter)
-            }
-            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 outline-none focus:border-emerald-600"
-            aria-label="Filtrar solicitudes por estado"
-          >
-            <option value="ALL">Todos los estados</option>
-            <option value="PENDING">Pendientes</option>
-            <option value="PROCESSING">En proceso</option>
-            <option value="COMPLETED">Completadas</option>
-            <option value="PARTIAL">Parciales</option>
-            <option value="FAILED">Fallidas</option>
-          </select>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            {/* Filtro por estado */}
+            <select
+              value={statusFilter}
+              onChange={(event) =>
+                setStatusFilter(event.target.value as StatusFilter)
+              }
+              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 outline-none focus:border-emerald-600"
+              aria-label="Filtrar solicitudes por estado"
+            >
+              <option value="ALL">Todos los estados</option>
+              <option value="PENDING">Pendientes</option>
+              <option value="PROCESSING">En proceso</option>
+              <option value="COMPLETED">Completadas</option>
+              <option value="PARTIAL">Parciales</option>
+              <option value="FAILED">Fallidas</option>
+            </select>
+
+            {/* Filtro por formato */}
+            <select
+              value={formatFilter}
+              onChange={(event) =>
+                setFormatFilter(event.target.value as FormatFilter)
+              }
+              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 outline-none focus:border-emerald-600"
+              aria-label="Filtrar solicitudes por formato"
+            >
+              <option value="ALL">Todos los formatos</option>
+              <option value="XML">XML</option>
+              <option value="METADATA">Metadata</option>
+            </select>
+          </div>
         </div>
 
         {requests.length === 0 ? (
@@ -634,7 +659,7 @@ export default function DownloadsClient({
           </div>
         ) : filteredRequests.length === 0 ? (
           <div className="p-8 text-center text-sm text-gray-500">
-            No hay solicitudes con el estado seleccionado.
+            No hay solicitudes que coincidan con los filtros seleccionados.
           </div>
         ) : (
           <>
@@ -738,17 +763,26 @@ export default function DownloadsClient({
                               : "↓ Descargar Excel"}
                           </button>
 
-                          <button
-                            type="button"
-                            onClick={() => handleDownload(item.id, "xml")}
-                            disabled={Boolean(downloadingId)}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:border-emerald-400 hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-50"
-                          >
-                            {downloadingId === `${item.id}:xml`
-                              ? "Preparando XML..."
-                              : "↓ Descargar XML (ZIP)"}
-                          </button>
+                          {item.downloadFormat === "XML" && (
+                            <button
+                              type="button"
+                              onClick={() => handleDownload(item.id, "xml")}
+                              disabled={Boolean(downloadingId)}
+                              className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:border-emerald-400 hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-50"
+                            >
+                              {downloadingId === `${item.id}:xml`
+                                ? "Preparando XML..."
+                                : "↓ Descargar XML (ZIP)"}
+                            </button>
+                          )}
+
+                          {item.downloadFormat === "METADATA" && (
+                            <span className="text-center text-xs text-gray-500">
+                              Datos generales de los CFDI
+                            </span>
+                          )}
                         </div>
+
                       ) : (
                         <span className="text-xs text-gray-400">
                           {item.status === "PENDING" ||

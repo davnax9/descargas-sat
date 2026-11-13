@@ -144,3 +144,113 @@ export async function saveExcelFile(
 
   return excelPath;
 }
+
+export type MetadataRecord = Record<string, string>;
+
+export async function saveMetadataRecords(
+  jobId: string,
+  records: MetadataRecord[]
+): Promise<number> {
+  if (records.length === 0) {
+    return 0;
+  }
+
+  const metadataDirectory = path.join(
+    getDownloadDirectory(jobId),
+    "Metadata"
+  );
+
+  await mkdir(metadataDirectory, { recursive: true });
+
+  const metadataPath = path.join(
+    metadataDirectory,
+    "metadata.json"
+  );
+
+  let existingRecords: MetadataRecord[] = [];
+
+  try {
+    const content = await readFile(metadataPath, "utf8");
+    const parsed: unknown = JSON.parse(content);
+
+    if (Array.isArray(parsed)) {
+      existingRecords = parsed as MetadataRecord[];
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+
+    if (code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  // Evitar duplicados cuando un paquete se vuelve a procesar.
+  const recordsByUuid = new Map<string, MetadataRecord>();
+
+  for (const record of existingRecords) {
+    const uuid = record.uuid?.trim();
+
+    if (uuid) {
+      recordsByUuid.set(uuid, record);
+    } else {
+      recordsByUuid.set(
+        `existing-${recordsByUuid.size}`,
+        record
+      );
+    }
+  }
+
+  for (const record of records) {
+    const uuid = record.uuid?.trim();
+
+    if (uuid) {
+      recordsByUuid.set(uuid, record);
+    } else {
+      recordsByUuid.set(
+        `new-${Date.now()}-${recordsByUuid.size}`,
+        record
+      );
+    }
+  }
+
+  const finalRecords = Array.from(recordsByUuid.values());
+
+  await writeFile(
+    metadataPath,
+    JSON.stringify(finalRecords, null, 2),
+    "utf8"
+  );
+
+  return records.length;
+}
+
+export async function readMetadataRecords(
+  jobId: string
+): Promise<MetadataRecord[]> {
+  const metadataPath = path.join(
+    getDownloadDirectory(jobId),
+    "Metadata",
+    "metadata.json"
+  );
+
+  try {
+    const content = await readFile(metadataPath, "utf8");
+    const parsed: unknown = JSON.parse(content);
+
+    if (!Array.isArray(parsed)) {
+      throw new Error(
+        "El archivo de Metadata no contiene un arreglo válido."
+      );
+    }
+
+    return parsed as MetadataRecord[];
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+
+    if (code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+}

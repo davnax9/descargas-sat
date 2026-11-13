@@ -79,7 +79,13 @@ export function createSatService() {
   );
 
   const requestBuilder = new FielRequestBuilder(fiel);
-  const webClient = new HttpsWebClient();
+  const SAT_TIMEOUT_MS = 120_000;
+
+  const webClient = new HttpsWebClient(
+    undefined,
+    undefined,
+    SAT_TIMEOUT_MS
+  );
 
   return new Service(requestBuilder, webClient);
 }

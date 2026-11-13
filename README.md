@@ -34,3 +34,20 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+###
+Los -env que se van a utilizar son los siguientes: ejemplos
+
+DATABASE_URL=[BD Neon en este caso]
+AUTH_SECRET=[secret]
+FIEL_ACTION_SECRET=[secret]
+DOWNLOAD_TOKEN_SECRET=[secret]
+
+Para el agent:
+
+PORT=4317
+WEB_APP_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+#CFDI_WEB_APP_URL=https://tu-dominio.vercel.app
+CFDI_WEB_APP_URL=http://localhost:3000
+FIEL_ACTION_SECRET=[secret mismo que en app de next]
+DOWNLOAD_TOKEN_SECRET=[secret mismo que en app de next]

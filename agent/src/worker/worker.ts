@@ -16,26 +16,48 @@ type JobHandler = (
   signal: AbortSignal
 ) => Promise<AgentJobResult>;
 
-function sleep(ms: number): Promise<void> {
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.resolve();
+  }
+
   return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+
+    const timer = setTimeout(finish, ms);
+
+    signal.addEventListener("abort", finish, { once: true });
   });
 }
 
 export async function startAgentWorker(
-  processJob: JobHandler
-) {
+  processJob: JobHandler,
+  shutdownSignal: AbortSignal
+): Promise<void> {
   console.log("[WORKER] Agente iniciado. Esperando trabajos...");
 
-  while (true) {
+  while (!shutdownSignal.aborted) {
     try {
       console.log("[WORKER] Consultando trabajos pendientes...");
 
       const job = await getNextJob();
 
+      if (shutdownSignal.aborted) {
+        if (job) {
+          console.warn(
+            "[WORKER] Se reclamó un trabajo durante el cierre. Se permitirá que expire su lease."
+          );
+        }
+
+        break;
+      }
+
       if (!job) {
-        console.log("[WORKER] No hay trabajos disponibles.");
-        await sleep(POLL_INTERVAL_MS);
+        await sleep(POLL_INTERVAL_MS, shutdownSignal);
         continue;
       }
 
@@ -51,11 +73,29 @@ export async function startAgentWorker(
 
       const controller = new AbortController();
 
+      const abortCurrentJob = () => {
+        console.log(
+          "[WORKER] Solicitando interrupción del trabajo actual..."
+        );
+
+        controller.abort();
+      };
+
+      shutdownSignal.addEventListener(
+        "abort",
+        abortCurrentJob,
+        { once: true }
+      );
+
       let heartbeatRunning = false;
       let leaseLost = false;
 
       const heartbeatTimer = setInterval(async () => {
-        if (heartbeatRunning || leaseLost) {
+        if (
+          heartbeatRunning ||
+          leaseLost ||
+          shutdownSignal.aborted
+        ) {
           return;
         }
 
@@ -107,6 +147,14 @@ export async function startAgentWorker(
           controller.signal
         );
 
+        if (shutdownSignal.aborted) {
+          console.warn(
+            `[WORKER] Cierre solicitado. No se reportará el resultado de ${job.id}.`
+          );
+
+          continue;
+        }
+
         if (leaseLost || controller.signal.aborted) {
           console.warn(
             `[WORKER] Se perdió la propiedad del trabajo ${job.id}. No se reportará el resultado.`
@@ -124,6 +172,14 @@ export async function startAgentWorker(
           satRequestId: result.satRequestId,
         });
       } catch (error) {
+        if (shutdownSignal.aborted) {
+          console.warn(
+            `[WORKER] Trabajo ${job.id} interrumpido por cierre del agente.`
+          );
+
+          continue;
+        }
+
         if (leaseLost || controller.signal.aborted) {
           console.warn(
             `[WORKER] Trabajo ${job.id} interrumpido por pérdida del lease.`
@@ -158,8 +214,17 @@ export async function startAgentWorker(
         );
       } finally {
         clearInterval(heartbeatTimer);
+
+        shutdownSignal.removeEventListener(
+          "abort",
+          abortCurrentJob
+        );
       }
     } catch (error) {
+      if (shutdownSignal.aborted) {
+        break;
+      }
+
       console.error(
         "[WORKER] Error en el ciclo del agente:",
         error
@@ -173,11 +238,13 @@ export async function startAgentWorker(
           "[WORKER] Dispositivo no autorizado. Se esperará una nueva vinculación."
         );
 
-        await sleep(15000);
+        await sleep(15000, shutdownSignal);
         continue;
       }
 
-      await sleep(POLL_INTERVAL_MS);
+      await sleep(POLL_INTERVAL_MS, shutdownSignal);
     }
   }
+
+  console.log("[WORKER] Agente detenido correctamente.");
 }

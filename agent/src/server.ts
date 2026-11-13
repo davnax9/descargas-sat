@@ -1,8 +1,10 @@
+
 import express, {
   type NextFunction,
   type Request,
   type Response,
 } from "express";
+
 import pairRouter from "./routes/pair.js";
 import { config } from "./config/env.js";
 import { startAgentWorker } from "./worker/worker.js";
@@ -51,18 +53,21 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   if (req.method === "OPTIONS") {
     res.setHeader(
       "Access-Control-Allow-Methods",
-      "GET, POST, OPTIONS",
+      "GET, POST, OPTIONS"
     );
 
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization",
+      "Content-Type, Authorization"
     );
 
     if (
       req.headers["access-control-request-private-network"] === "true"
     ) {
-      res.setHeader("Access-Control-Allow-Private-Network", "true");
+      res.setHeader(
+        "Access-Control-Allow-Private-Network",
+        "true"
+      );
     }
 
     res.status(204).end();
@@ -72,10 +77,12 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Permitir recibir los archivos .cer y .key codificados en Base64.
-app.use(express.json({
-  limit: "3mb",
-}));
+// Recibir archivos .cer y .key codificados en Base64.
+app.use(
+  express.json({
+    limit: "3mb",
+  })
+);
 
 // Comprobar que el agente esté funcionando.
 app.get("/health", (_req: Request, res: Response) => {
@@ -93,6 +100,7 @@ app.use("/fiel", fielRouter);
 // Vinculación automática desde el dashboard.
 app.use("/pair", pairRouter);
 
+// Descargas locales.
 app.use("/downloads", downloadsRouter);
 
 // Errores internos.
@@ -101,7 +109,7 @@ app.use(
     error: unknown,
     _req: Request,
     res: Response,
-    _next: NextFunction,
+    _next: NextFunction
   ) => {
     console.error("Error interno del agente:", error);
 
@@ -109,7 +117,7 @@ app.use(
       ok: false,
       error: "Error interno del agente local.",
     });
-  },
+  }
 );
 
 // Rutas inexistentes.
@@ -120,35 +128,107 @@ app.use((_req: Request, res: Response) => {
   });
 });
 
-const server = app.listen(config.port, config.host, () => {
-  console.log("--------------------------------------");
-  console.log("       CFDI LOCAL - AGENTE");
-  console.log("--------------------------------------");
-  console.log("Estado:       Ejecutándose");
-  console.log(`Dirección:    http://${config.host}:${config.port}`);
-  console.log(`Puerto:       ${config.port}`);
-  console.log("--------------------------------------");
-  console.log("Orígenes autorizados:");
+// Control de cierre del agente.
+const shutdownController = new AbortController();
 
-  for (const origin of config.allowedOrigins) {
-    console.log(`- ${origin}`);
+let workerPromise: Promise<void> | null = null;
+let shuttingDown = false;
+
+const server = app.listen(
+  config.port,
+  config.host,
+  () => {
+    console.log("--------------------------------------");
+    console.log("       CFDI LOCAL - AGENTE");
+    console.log("--------------------------------------");
+    console.log("Estado:       Ejecutándose");
+    console.log(`Dirección:    http://${config.host}:${config.port}`);
+    console.log(`Puerto:       ${config.port}`);
+    console.log("--------------------------------------");
+    console.log("Orígenes autorizados:");
+
+    for (const origin of config.allowedOrigins) {
+      console.log(`- ${origin}`);
+    }
+
+    console.log("--------------------------------------");
+    console.log("Iniciando worker de descargas CFDI...");
+
+    workerPromise = startAgentWorker(
+      processSatJob,
+      shutdownController.signal
+    ).catch((error) => {
+      console.error(
+        "[AGENT] Error fatal en el worker:",
+        error
+      );
+
+      process.exitCode = 1;
+    });
   }
-
-  console.log("--------------------------------------");
-
-  console.log("Iniciando worker de descargas CFDI...");
-
-  void startAgentWorker(processSatJob).catch((error) => {
-    console.error("Error fatal al iniciar el worker:", error);
-  });
-});
+);
 
 function shutdown() {
-  console.log("\nCerrando agente local...");
+  if (shuttingDown) {
+    return;
+  }
 
-  server.close(() => {
-    console.log("Agente detenido.");
-    process.exit(0);
+  shuttingDown = true;
+
+  console.log("\n[AGENT] Solicitando cierre del agente...");
+
+  // Detener el worker y solicitar la interrupción
+  // del trabajo que pudiera estar procesándose.
+  shutdownController.abort();
+
+  // Límite de seguridad para evitar que el proceso
+  // permanezca abierto indefinidamente.
+  const forceShutdownTimer = setTimeout(() => {
+    console.error(
+      "[AGENT] Tiempo máximo de cierre excedido. Forzando salida."
+    );
+
+    process.exit(1);
+  }, 20000);
+
+  forceShutdownTimer.unref();
+
+  // Dejar de aceptar nuevas conexiones.
+  server.close((error) => {
+    if (error) {
+      console.error(
+        "[AGENT] Error cerrando el servidor:",
+        error
+      );
+
+      process.exitCode = 1;
+    }
+
+    const finishShutdown = async () => {
+      // Esperar a que el worker termine su ciclo de cierre.
+      if (workerPromise) {
+        await workerPromise;
+      }
+
+      clearTimeout(forceShutdownTimer);
+
+      console.log("[AGENT] CFDI Local Agent detenido.");
+
+      // Node finalizará cuando no queden recursos activos.
+      if (!error) {
+        process.exitCode = 0;
+      }
+    };
+
+    void finishShutdown().catch((finishError) => {
+      console.error(
+        "[AGENT] Error durante el cierre final:",
+        finishError
+      );
+
+      clearTimeout(forceShutdownTimer);
+      process.exitCode = 1;
+    });
   });
 }
 

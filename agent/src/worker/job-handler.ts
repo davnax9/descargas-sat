@@ -5,9 +5,16 @@ import {
   DownloadType,
   RequestType,
   CfdiPackageReader,
+  MetadataPackageReader,
   DocumentStatus,
 } from "@nodecfdi/sat-ws-descarga-masiva";
-import { generateCfdiExcel } from "../services/excel-service.js";
+
+import {
+  generateCfdiExcel,
+  generateMetadataExcel,
+  regenerateCfdiExcel,
+} from "../services/excel-service.js";
+
 import {
   AgentJob,
   AgentJobResult,
@@ -19,6 +26,7 @@ import { createSatService } from "../services/sat-service.js";
 import {
   saveZipPackage,
   saveXmlDocument,
+  saveMetadataRecords,
 } from "../services/download-storage.js";
 
 const VERIFY_INTERVAL_MS = 30000;
@@ -47,6 +55,12 @@ function sleep(
     signal.addEventListener("abort", onAbort, {
       once: true,
     });
+
+    // Evita perder una cancelación ocurrida justo
+    // antes de registrar el listener.
+    if (signal.aborted) {
+      onAbort();
+    }
   });
 }
 
@@ -68,6 +82,11 @@ async function createSatRequest(
       ? new DownloadType("issued")
       : new DownloadType("received");
 
+  const requestType =
+    job.downloadFormat === "METADATA"
+      ? new RequestType("metadata")
+      : new RequestType("xml");
+
   let parameters = QueryParameters.create()
     .withPeriod(
       DateTimePeriod.createFromValues(
@@ -76,11 +95,11 @@ async function createSatRequest(
       )
     )
     .withDownloadType(downloadType)
-    .withRequestType(new RequestType("xml"));
+    .withRequestType(requestType);
 
   // El SAT no permite consultar XML recibidos
   // incluyendo comprobantes cancelados.
-  // Por eso solicitamos únicamente CFDI vigentes.
+  // Conservamos el comportamiento actual.
   if (job.requestType === "RECEIVED") {
     parameters = parameters.withDocumentStatus(
       new DocumentStatus("active")
@@ -99,7 +118,9 @@ async function createSatRequest(
     );
   }
 
-  console.log("[SAT] Enviando solicitud de descarga...");
+  console.log(
+    `[SAT] Enviando solicitud de descarga ${job.downloadFormat}...`
+  );
 
   const response = await service.query(parameters);
 
@@ -121,7 +142,6 @@ async function createSatRequest(
 
   console.log("[SAT] Solicitud aceptada:", requestId);
 
-  // Guardar inmediatamente el identificador en Neon.
   await saveSatRequestId(job.id, requestId);
 
   console.log("[SAT] Identificador guardado en CFDI Local.");
@@ -210,9 +230,7 @@ async function downloadPackages(
       checkAborted(signal);
 
       if (!response.getStatus().isAccepted()) {
-        throw new Error(
-          response.getStatus().getMessage()
-        );
+        throw new Error(response.getStatus().getMessage());
       }
 
       const content = response.getPackageContent();
@@ -225,23 +243,48 @@ async function downloadPackages(
 
       console.log("[LOCAL] ZIP guardado:", zipPath);
 
-      const reader =
-        await CfdiPackageReader.createFromFile(zipPath);
-
       let documentCount = 0;
 
-      for await (const map of reader.cfdis()) {
-        checkAborted(signal);
+      if (job.downloadFormat === "XML") {
+        const reader =
+          await CfdiPackageReader.createFromFile(zipPath);
 
-        for (const [name, xmlContent] of map) {
-          await saveXmlDocument(
-            job.id,
-            `${name}.xml`,
-            xmlContent
-          );
+        for await (const map of reader.cfdis()) {
+          checkAborted(signal);
 
-          documentCount++;
+          for (const [name, xmlContent] of map) {
+            await saveXmlDocument(
+              job.id,
+              `${name}.xml`,
+              xmlContent
+            );
+
+            documentCount++;
+          }
         }
+
+        console.log(
+          `[LOCAL] Paquete XML procesado. Documentos: ${documentCount}`
+        );
+      } else {
+        const reader =
+          await MetadataPackageReader.createFromFile(zipPath);
+
+        const records: Record<string, string>[] = [];
+
+        for await (const item of reader.metadata()) {
+          checkAborted(signal);
+
+          records.push(item.all());
+        }
+
+        await saveMetadataRecords(job.id, records);
+
+        documentCount = records.length;
+
+        console.log(
+          `[LOCAL] Paquete Metadata procesado. Registros: ${documentCount}`
+        );
       }
 
       documentsDownloaded += documentCount;
@@ -251,10 +294,6 @@ async function downloadPackages(
         status: "DOWNLOADED",
         documentCount,
       });
-
-      console.log(
-        `[LOCAL] Paquete procesado. XML encontrados: ${documentCount}`
-      );
     } catch (error) {
       if (signal.aborted) {
         throw error;
@@ -286,6 +325,7 @@ export async function processSatJob(
   console.log("[WORKER] Procesando solicitud:", {
     id: job.id,
     requestType: job.requestType,
+    downloadFormat: job.downloadFormat,
     startDate: job.startDate,
     endDate: job.endDate,
     attempts: job.attempts,
@@ -298,8 +338,6 @@ export async function processSatJob(
 
   let satRequestId = job.satRequestId ?? null;
 
-  // Si el trabajo ya tiene identificador SAT,
-  // recuperamos la solicitud en lugar de crear otra.
   if (!satRequestId) {
     satRequestId = await createSatRequest(
       job,
@@ -349,7 +387,10 @@ export async function processSatJob(
 
   if (result.documentsDownloaded > 0) {
     try {
-      const excelResult = await generateCfdiExcel(job.id);
+      const excelResult = await regenerateCfdiExcel(
+        job.id,
+        job.downloadFormat
+      );
 
       console.log("[EXCEL] Generación finalizada:", {
         documentsProcessed: excelResult.documentsProcessed,
@@ -359,7 +400,7 @@ export async function processSatJob(
 
       if (excelResult.invalidDocuments > 0) {
         excelError =
-          `${excelResult.invalidDocuments} XML no pudieron interpretarse.`;
+          `${excelResult.invalidDocuments} registros o XML no pudieron interpretarse.`;
       }
     } catch (error) {
       console.error(
@@ -368,7 +409,7 @@ export async function processSatJob(
       );
 
       excelError =
-        "Los XML se descargaron, pero no fue posible generar el Excel.";
+        "Los documentos se descargaron, pero no fue posible generar el Excel.";
     }
   }
 
@@ -390,13 +431,9 @@ export async function processSatJob(
 
   return {
     status: isPartial ? "PARTIAL" : "COMPLETED",
-
     documentsDownloaded: result.documentsDownloaded,
-
     satRequestId,
-
     packages: result.packages,
-
     errorMessage:
       errorMessages.length > 0
         ? errorMessages.join(" ")
