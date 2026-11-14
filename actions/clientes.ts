@@ -5,7 +5,7 @@ import "server-only";
 
 import argon2 from "argon2";
 import { z } from "zod";
-
+import { getExpirationFromDate } from "@/utils/auth/license-status";
 import prisma from "@/utils/prisma";
 import { requireAdmin } from "@/utils/auth/permissions";
 
@@ -27,23 +27,6 @@ const updateClientSchema = z.object({
   password: z.string().max(200).optional(),
 });
 
-function parseExpiration(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return null;
-  }
-
-  const date = new Date(`${value}T23:59:59.999Z`);
-
-  if (
-    Number.isNaN(date.getTime()) ||
-    date.toISOString().slice(0, 10) !== value
-  ) {
-    return null;
-  }
-
-  return date;
-}
-
 export async function createClientAction(formData: FormData) {
   try {
     await requireAdmin();
@@ -64,7 +47,7 @@ export async function createClientAction(formData: FormData) {
     }
 
     const data = validation.data;
-    const expiresAt = parseExpiration(data.expiresAt);
+    const expiresAt = getExpirationFromDate(data.expiresAt);
 
     if (!expiresAt || expiresAt <= new Date()) {
       return {
@@ -122,7 +105,7 @@ export async function updateClientAction(formData: FormData) {
     }
 
     const data = validation.data;
-    const expiresAt = parseExpiration(data.expiresAt);
+    const expiresAt = getExpirationFromDate(data.expiresAt);
 
     if (!expiresAt) {
       return {

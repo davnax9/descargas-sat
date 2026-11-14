@@ -11,7 +11,9 @@ const heartbeatSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const agent = await authenticateAgent(request);
+    const agent = await authenticateAgent(request, {
+      allowGrace: true,
+    });
 
     if (!agent) {
       return NextResponse.json(
@@ -54,6 +56,7 @@ export async function POST(request: Request) {
         where: {
           id: validation.data.jobId,
           assignedDeviceId: agent.id,
+          licenseId: agent.licenseId,
           status: "PROCESSING",
           leaseExpiresAt: {
             gt: now,

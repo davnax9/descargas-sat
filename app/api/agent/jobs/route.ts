@@ -3,11 +3,7 @@ import { NextResponse, connection } from "next/server";
 import prisma from "@/utils/prisma";
 import { authenticateAgent } from "@/utils/agent/auth";
 
-// export const runtime = "nodejs";
-// export const dynamic = "force-dynamic";
-
 const LEASE_DURATION_MINUTES = 5;
-
 
 function formatJob(
   job: {
@@ -33,30 +29,36 @@ function formatJob(
   };
 }
 
-
 export async function GET(request: Request) {
   await connection();
 
   try {
-    const agent = await authenticateAgent(request);
+    // Esta ruta sí admite agentes durante la gracia,
+    // pero solamente para reanudar trabajos existentes.
+    const agent = await authenticateAgent(request, {
+      allowGrace: true,
+    });
 
     if (!agent) {
       return NextResponse.json(
         {
           success: false,
-          message: "Agente no autorizado.",
+          message: "Agente no autorizado o licencia vencida.",
         },
-        { status: 401 },
+        { status: 401 }
       );
     }
 
+    const isInGrace = agent.licenseStatus === "GRACE_PERIOD";
+
     const now = new Date();
+
     const leaseExpiresAt = new Date(
-      now.getTime() + LEASE_DURATION_MINUTES * 60 * 1000,
+      now.getTime() + LEASE_DURATION_MINUTES * 60 * 1000
     );
 
-    // Si este dispositivo ya tiene una tarea activa,
-    // renovamos su asignación y devolvemos esa tarea.
+    // Primero buscamos un trabajo que esta computadora
+    // ya estaba procesando y cuya asignación sigue vigente.
     const activeJob = await prisma.downloadRequest.findFirst({
       where: {
         licenseId: agent.licenseId,
@@ -88,21 +90,32 @@ export async function GET(request: Request) {
       });
     }
 
-    // Buscar una solicitud pendiente o una asignación vencida.
+    // Durante la gracia solamente se permite recuperar
+    // un trabajo PROCESSING que pertenecía a este dispositivo.
     const candidate = await prisma.downloadRequest.findFirst({
       where: {
         licenseId: agent.licenseId,
-        OR: [
-          {
-            status: "PENDING",
-          },
-          {
-            status: "PROCESSING",
-            leaseExpiresAt: {
-              lte: now,
-            },
-          },
-        ],
+        ...(isInGrace
+          ? {
+              status: "PROCESSING" as const,
+              assignedDeviceId: agent.id,
+              leaseExpiresAt: {
+                lte: now,
+              },
+            }
+          : {
+              OR: [
+                {
+                  status: "PENDING" as const,
+                },
+                {
+                  status: "PROCESSING" as const,
+                  leaseExpiresAt: {
+                    lte: now,
+                  },
+                },
+              ],
+            }),
       },
       orderBy: {
         createdAt: "asc",
@@ -113,27 +126,38 @@ export async function GET(request: Request) {
       return NextResponse.json({
         success: true,
         job: null,
-        message: "No hay trabajos pendientes.",
+        message: isInGrace
+          ? "No hay trabajos anteriores que puedan reanudarse."
+          : "No hay trabajos pendientes.",
       });
     }
 
-    // Reclamo atómico: solamente un agente podrá ganar
-    // la asignación de esta solicitud.
+    // Reclamo atómico del trabajo.
     const claimed = await prisma.downloadRequest.updateMany({
       where: {
         id: candidate.id,
         licenseId: agent.licenseId,
-        OR: [
-          {
-            status: "PENDING",
-          },
-          {
-            status: "PROCESSING",
-            leaseExpiresAt: {
-              lte: now,
-            },
-          },
-        ],
+        ...(isInGrace
+          ? {
+              status: "PROCESSING" as const,
+              assignedDeviceId: agent.id,
+              leaseExpiresAt: {
+                lte: now,
+              },
+            }
+          : {
+              OR: [
+                {
+                  status: "PENDING" as const,
+                },
+                {
+                  status: "PROCESSING" as const,
+                  leaseExpiresAt: {
+                    lte: now,
+                  },
+                },
+              ],
+            }),
       },
       data: {
         status: "PROCESSING",
@@ -172,8 +196,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       success: true,
-      job: job ? formatJob(job, false) : null,
-      resumed: false,
+      job: job ? formatJob(job, true) : null,
+      resumed: true,
     });
   } catch (error) {
     console.error("Error consultando trabajos del agente:", error);
@@ -183,7 +207,7 @@ export async function GET(request: Request) {
         success: false,
         message: "No fue posible consultar los trabajos.",
       },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }

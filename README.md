@@ -51,3 +51,25 @@ WEB_APP_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 CFDI_WEB_APP_URL=http://localhost:3000
 FIEL_ACTION_SECRET=[secret mismo que en app de next]
 DOWNLOAD_TOKEN_SECRET=[secret mismo que en app de next]
+
+##
+CREAR EXE INSTALADOR DE AGENTE
+En carpeta raiz del proyecto ejecutar lo siguiente:
+-Eliminar compilacion anterior
+Remove-Item .\release\cfdi-local-agent\app\dist -Recurse -Force
+-Copiar compilacion nueva
+Copy-Item .\agent\dist .\release\cfdi-local-agent\app\dist -Recurse
+-Actualiza archivos dependencias
+Copy-Item .\agent\package.json .\release\cfdi-local-agent\app\package.json -Force
+Copy-Item .\agent\package-lock.json .\release\cfdi-local-agent\app\package-lock.json -Force
+-Instalar dependencias de produccion
+cd .\release\cfdi-local-agent\app
+npm ci --omit=dev
+
+Debemos tener los runtimes en carpeta release/cfdi-local-agent/runtime
+
+Recuerda que en agent hay una carpeta installer que contiene:
+-register-task.ps1
+-supervisor.ps1
+-unregister-task.ps1
+-CFDILocalAgent.iss

@@ -29,7 +29,9 @@ export async function POST(
   context: RouteContext
 ) {
   try {
-    const agent = await authenticateAgent(request);
+    const agent = await authenticateAgent(request, {
+      allowGrace: true,
+    });
 
     if (!agent) {
       return NextResponse.json(
@@ -63,6 +65,7 @@ export async function POST(
         where: {
           id: jobId,
           assignedDeviceId: agent.id,
+          licenseId: agent.licenseId,
           status: "PROCESSING",
           leaseExpiresAt: {
             gt: now,

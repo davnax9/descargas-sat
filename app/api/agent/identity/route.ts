@@ -20,20 +20,14 @@ export async function GET(request: Request) {
     select: {
       rfc: true,
       isActive: true,
+      isAdmin: true,
       expiresAt: true,
     },
   });
 
-  if (!license || !license.isActive) {
+  if (!license) {
     return NextResponse.json(
       { error: "Licencia no disponible." },
-      { status: 403 }
-    );
-  }
-
-  if (!license.expiresAt || license.expiresAt <= new Date()) {
-    return NextResponse.json(
-      { error: "La licencia ha vencido." },
       { status: 403 }
     );
   }

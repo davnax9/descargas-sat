@@ -26,3 +26,15 @@ export async function requireClient() {
 
   return account;
 }
+
+export async function requireActiveClient() {
+  const account = await requireClient();
+
+  if (account.licenseStatus !== "ACTIVE") {
+    throw new Error(
+      "Tu licencia no está vigente. Renueva tu licencia para realizar esta operación."
+    );
+  }
+
+  return account;
+}

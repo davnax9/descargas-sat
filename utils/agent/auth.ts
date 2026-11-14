@@ -3,6 +3,11 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import prisma from "@/utils/prisma";
+import { getLicenseStatus } from "@/utils/auth/license-status";
+
+type AuthenticateAgentOptions = {
+  allowGrace?: boolean;
+};
 
 function hashValue(value: string) {
   return createHash("sha256")
@@ -10,7 +15,10 @@ function hashValue(value: string) {
     .digest("hex");
 }
 
-export async function authenticateAgent(request: Request) {
+export async function authenticateAgent(
+  request: Request,
+  options: AuthenticateAgentOptions = {}
+) {
   const authorization = request.headers.get("authorization");
 
   if (!authorization?.startsWith("Bearer ")) {
@@ -47,13 +55,15 @@ export async function authenticateAgent(request: Request) {
 
   const now = new Date();
 
-  if (!device.license.isActive) {
+  const licenseStatus = getLicenseStatus(device.license, now);
+
+  if (licenseStatus === "DISABLED" || licenseStatus === "EXPIRED") {
     return null;
   }
 
   if (
-    !device.license.isAdmin &&
-    (!device.license.expiresAt || device.license.expiresAt <= now)
+    licenseStatus === "GRACE_PERIOD" &&
+    !options.allowGrace
   ) {
     return null;
   }
@@ -70,5 +80,6 @@ export async function authenticateAgent(request: Request) {
   return {
     id: device.id,
     licenseId: device.licenseId,
+    licenseStatus,
   };
 }

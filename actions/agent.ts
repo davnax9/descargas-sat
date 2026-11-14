@@ -5,13 +5,14 @@ import "server-only";
 
 import { createHash, randomBytes } from "node:crypto";
 import prisma from "@/utils/prisma";
-import { requireClient } from "@/utils/auth/permissions";
+import { requireActiveClient, requireClient } from "@/utils/auth/permissions";
 
 const PAIRING_DURATION_MINUTES = 10;
 
 export async function createAgentPairingCode() {
   try {
-    const account = await requireClient();
+    // Durante la gracia no se permiten nuevas vinculaciones.
+    const account = await requireActiveClient();
 
     const code = randomBytes(32).toString("base64url");
 
@@ -20,7 +21,7 @@ export async function createAgentPairingCode() {
       .digest("hex");
 
     const expiresAt = new Date(
-      Date.now() + PAIRING_DURATION_MINUTES * 60 * 1000,
+      Date.now() + PAIRING_DURATION_MINUTES * 60 * 1000
     );
 
     await prisma.agentPairingCode.create({
@@ -41,10 +42,15 @@ export async function createAgentPairingCode() {
 
     return {
       success: false,
-      message: "No fue posible generar el código de emparejamiento.",
+      message:
+        error instanceof Error &&
+        error.message.includes("licencia no está vigente")
+          ? error.message
+          : "No fue posible generar el código de emparejamiento.",
     };
   }
 }
+
 
 export async function getAgentDevices() {
   const account = await requireClient();

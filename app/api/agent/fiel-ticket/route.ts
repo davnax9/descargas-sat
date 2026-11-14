@@ -58,6 +58,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (
+      action === "configure" &&
+      license.licenseStatus !== "ACTIVE"
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "No puedes configurar tu e.firma durante el periodo de gracia. Renueva tu licencia para continuar.",
+        },
+        { status: 403 }
+      );
+    }
+
     // Debe existir un dispositivo activo vinculado a esta licencia.
     const device = await prisma.agentDevice.findFirst({
       where: {

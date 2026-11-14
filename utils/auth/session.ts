@@ -5,6 +5,11 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import prisma from "@/utils/prisma";
 
+import {
+  getGraceDaysRemaining,
+  getLicenseStatus,
+} from "@/utils/auth/license-status";
+
 const COOKIE_NAME = "cfdi_session";
 const SESSION_DURATION = 60 * 60 * 8;
 
@@ -84,12 +89,23 @@ export async function getCurrentLicense() {
     return null;
   }
 
+  const licenseStatus = getLicenseStatus(account);
+
   if (
-    !account.isAdmin &&
-    (!account.expiresAt || account.expiresAt <= new Date())
+    licenseStatus === "EXPIRED" ||
+    licenseStatus === "DISABLED"
   ) {
     return null;
   }
 
-  return account;
+  const graceDaysRemaining =
+    licenseStatus === "GRACE_PERIOD" && account.expiresAt
+      ? getGraceDaysRemaining(account.expiresAt)
+      : null;
+
+  return {
+    ...account,
+    licenseStatus,
+    graceDaysRemaining,
+  };
 }

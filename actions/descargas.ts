@@ -4,7 +4,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import prisma from "@/utils/prisma";
-import { getCurrentLicense } from "@/utils/auth/session";
+import { requireActiveClient } from "@/utils/auth/permissions";
 
 type DownloadActionResult =
   | {
@@ -33,12 +33,8 @@ type DownloadActionResult =
 const downloadSchema = z.object({
   requestType: z.enum(["ISSUED", "RECEIVED"]),
   downloadFormat: z.enum(["XML", "METADATA"]).default("XML"),
-  startDate: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inicial inválida."),
-  endDate: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha final inválida."),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inicial inválida."),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha final inválida."),
 });
 
 export async function createDownloadRequest(input: {
@@ -48,22 +44,8 @@ export async function createDownloadRequest(input: {
   endDate: string;
 }): Promise<DownloadActionResult> {
   try {
-    const license = await getCurrentLicense();
-
-    if (!license) {
-      return {
-        success: false,
-        error: "Tu sesión ha expirado. Inicia sesión nuevamente.",
-      };
-    }
-
-    if (license.isAdmin) {
-      return {
-        success: false,
-        error:
-          "Esta operación solo está disponible para cuentas de cliente.",
-      };
-    }
+    // Solo permite crear solicitudes con licencia vigente.
+    const license = await requireActiveClient();
 
     const parsed = downloadSchema.safeParse(input);
 
@@ -92,8 +74,7 @@ export async function createDownloadRequest(input: {
     if (start > end) {
       return {
         success: false,
-        error:
-          "La fecha inicial no puede ser posterior a la fecha final.",
+        error: "La fecha inicial no puede ser posterior a la fecha final.",
       };
     }
 
@@ -157,10 +138,15 @@ export async function createDownloadRequest(input: {
   } catch (error) {
     console.error("createDownloadRequest:", error);
 
+    const message =
+      error instanceof Error &&
+      error.message.includes("licencia no está vigente")
+        ? error.message
+        : "Tu sesión ha expirado o no tienes permisos para crear solicitudes.";
+
     return {
       success: false,
-      error:
-        "Ocurrió un error al crear la solicitud. Intenta nuevamente.",
+      error: message,
     };
   }
 }

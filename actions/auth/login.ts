@@ -7,6 +7,11 @@ import { z } from "zod";
 import prisma from "@/utils/prisma";
 import { createSession } from "@/utils/auth/session";
 
+import {
+  getGraceDaysRemaining,
+  getLicenseStatus,
+} from "@/utils/auth/license-status";
+
 const loginSchema = z.object({
   rfc: z
     .string()
@@ -55,13 +60,13 @@ export async function loginAction(formData: FormData) {
     };
   }
 
-  if (
-    !account.isAdmin &&
-    (!account.expiresAt || account.expiresAt <= new Date())
-  ) {
+  const licenseStatus = getLicenseStatus(account);
+
+  if (licenseStatus === "EXPIRED") {
     return {
       success: false,
-      message: "Tu licencia ha vencido. Contacta al administrador.",
+      message:
+        "Tu periodo de gracia ha terminado. Contacta al administrador para reactivar tu licencia.",
     };
   }
 
@@ -72,9 +77,19 @@ export async function loginAction(formData: FormData) {
 
   await createSession(account.id);
 
+  const graceDaysRemaining =
+    licenseStatus === "GRACE_PERIOD" && account.expiresAt
+      ? getGraceDaysRemaining(account.expiresAt)
+      : null;
+
   return {
     success: true,
     isAdmin: account.isAdmin,
-    message: "Inicio de sesión correcto.",
+    licenseStatus,
+    graceDaysRemaining,
+    message:
+      licenseStatus === "GRACE_PERIOD"
+        ? `Tu licencia ha vencido. Te quedan ${graceDaysRemaining} días de periodo de gracia.`
+        : "Inicio de sesión correcto.",
   };
 }

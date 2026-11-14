@@ -3,9 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import prisma from "@/utils/prisma";
-
-// export const runtime = "nodejs";
-// export const dynamic = "force-dynamic";
+import { getLicenseStatus } from "@/utils/auth/license-status";
 
 const pairSchema = z.object({
   code: z.string().min(30).max(100),
@@ -61,15 +59,18 @@ export async function POST(request: NextRequest) {
 
       const license = pairingCode.license;
 
-      if (!license.isActive) {
+      const licenseStatus = getLicenseStatus(license, now);
+
+      if (licenseStatus === "DISABLED") {
         throw new Error("INACTIVE_LICENSE");
       }
 
-      if (
-        !license.isAdmin &&
-        (!license.expiresAt || license.expiresAt <= now)
-      ) {
-        throw new Error("EXPIRED_LICENSE");
+      if (licenseStatus !== "ACTIVE") {
+        throw new Error(
+          licenseStatus === "GRACE_PERIOD"
+            ? "GRACE_PERIOD_LICENSE"
+            : "EXPIRED_LICENSE"
+        );
       }
 
       const consumed = await tx.agentPairingCode.updateMany({
@@ -142,6 +143,16 @@ export async function POST(request: NextRequest) {
               message: "La licencia ha vencido.",
             },
             { status: 403 },
+          );
+
+        case "GRACE_PERIOD_LICENSE":
+          return NextResponse.json(
+            {
+              success: false,
+              message:
+                "Tu licencia está en periodo de gracia. No puedes vincular nuevas computadoras hasta renovarla.",
+            },
+            { status: 403 }
           );
       }
     }
