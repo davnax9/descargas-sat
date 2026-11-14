@@ -6,7 +6,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().min(1024).max(65535).default(4317),
   WEB_APP_ORIGINS: z
     .string()
-    .default("http://localhost:3000,http://127.0.0.1:3000"),
+    .default("http://localhost:3000,http://127.0.0.1:3000,https://descargas-sat.vercel.app/"),
   DOWNLOAD_TOKEN_PUBLIC_KEY: z.string().min(1),
 });
 
